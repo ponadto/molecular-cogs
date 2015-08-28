@@ -1,3 +1,14 @@
+EXAMPLE = '''
+Example run:
+
+    python bootstrappingError.py -179.00 ii-nh3
+
+where:
+    -179.00 --- is the dihedral angle for which the bootstrapping will be carried out
+    ii-nh3  --- is the molecule name for which the bootstrapping will be ran (auxiliary data will be read from "ii-nh3.conf")
+'''
+
+
 import numpy
 import cPickle as pkl
 import gzip
@@ -6,9 +17,18 @@ import glob
 import os
 import time
 import sys
+import smallFunctions
 
 
-angles = sys.argv[1:]
+INTERACTIONS = ["ele","vdw","bonds","angle","tors"]
+N_OF_BINS = 1000
+N_OF_RUNS = 100
+CALC_CLASSIC_BOOTSTRAP = False # classic bootstrap is VERY time consuming
+PATH_TO_LARGE_OUTPUT = "/home/ponadto/Desktop/largeOutput2/"
+PATH_TO_BOOTSTRAP_OUTPUT = "/home/ponadto/molecular-cogs/bootstrapOutput/"
+   
+
+
 '''
 fileNames = glob.glob("ge*gz")
 angles = []
@@ -17,10 +37,7 @@ for file in fileNames:
 print "len(angles): ",len(angles)
 for angle in angles: print "python bootstrappingError.py ",angle
 '''
-interactions = ["ele","vdw","bonds","angle","tors"]
 
-N_OF_BINS = 1000
-N_OF_RUNS = 100
 
 def blockBootstrap(statistic,nOfBins,sequence,nOfRuns):
     statistics = []
@@ -39,16 +56,18 @@ def blockBootstrap(statistic,nOfBins,sequence,nOfRuns):
     
 def classicBootstrap(statistic,sequence,nOfRuns):
     ''' 
-        WOOOOOOOOOOOLNE, ale w C++ bylo rownie wolne
+        SLOOOOOOOOOOOW, but not much slower than when written in C++
     '''
     sequence_np = numpy.array(sequence)
     statistics = [ statistic(numpy.random.choice(sequence_np,size=len(sequence),replace=True)) for run in xrange(nOfRuns)]
     return ( numpy.mean(statistics), numpy.var(statistics) )
 
     
-def getSequences(fileName,interaction,angle,zksis):
+def getSequences(fileName,interaction,angle,zksis,conf):
     index = 0
-    streams = [ [ open("tmp_%s_%.2f_%d_%d.dat" % (interaction,angle,j,i),"w") for i in xrange(j+1,11)] for j in xrange(10)]
+    nOfAtoms = conf["nOfAtoms"]
+    prefix = conf["prefix"]
+    streams = [ [ open(PATH_TO_BOOTSTRAP_OUTPUT+"tmp_%s_%.2f_%s_%d_%d.dat" % (interaction,angle,prefix,j,i),"w") for i in xrange(j+1,nOfAtoms)] for j in xrange(nOfAtoms-1)]
     try:
 	with gzip.open(fileName) as f:
     	    row = 0
@@ -59,24 +78,53 @@ def getSequences(fileName,interaction,angle,zksis):
     	                streams[row][column-row-1].write(str(float(words[column])*zksis[index])+" ")
     	                #streams[row][column-row-1].write(str(float(words[column]))+" ")
     	        row += 1
-    	        if row>10:
+    	        if row>nOfAtoms-1:
     	           row = 0
     	           index += 1
     except IndexError:
 	print "index = ",index
-    for i in xrange(10):
-        for j in xrange(i+1,11):
+    for i in xrange(nOfAtoms-1):
+        for j in xrange(i+1,nOfAtoms):
             streams[i][j-i-1].close()
 
 
 
 
-for angle in angles:
+
+
+
+
+
+
+
+if __name__=="__main__":
+    
+    try:
+        angle = sys.argv[1]
+        prefix = sys.argv[2]
+    except IndexError:
+        print "Wrong arguments"
+        print EXAMPLE
+        sys.exit(1)
+
+    conf = smallFunctions.parseConf(prefix)
+
+    for key in sorted(conf.keys()):
+        print "%s : %s" % (key,str(conf[key]))
+
+    prefix = conf["prefix"]
+    timeStep = conf["timeStep"]
+    twistPeriod = conf["twistPeriod"]
+    nOfSamples = conf["nOfSamples"]
+    binWidth = conf["binWidth"]
+    idleSteps = conf["idleSteps"]
+    nOfAtoms = conf["nOfAtoms"]
+
     angle = float(angle)
     zksis = []
     dAdKsis = []
     entropic = []
-    fileName = "generalOutput_angle=%.2f_timestep=0.002_twistPeriod=1000_nOfSamples=1000000_binWidth=0.05_idleSteps=50.gz" % angle
+    fileName = PATH_TO_LARGE_OUTPUT+"generalOutput_prefix=%s_angle=%.2f_timestep=%s_twistPeriod=%d_nOfSamples=%d_binWidth=%s_idleSteps=%d.gz" % (prefix,angle,str(timeStep),twistPeriod,nOfSamples,str(binWidth),idleSteps)
     print fileName
     with gzip.open(fileName,"r") as wput:
         for line in wput:
@@ -91,7 +139,7 @@ for angle in angles:
             gradUgradKsi = float(words[4])
             entropic.append( (dAdKsi-gradUgradKsi)*zksi**(-0.5) )
     
-    wyputDoEnergiiSwobodnej = open("dAdKsiAndZksi=%.2f.dat"%angle,"w")
+    wyputDoEnergiiSwobodnej = open(PATH_TO_BOOTSTRAP_OUTPUT+"dAdKsiAndZksi=%.2f.dat"%angle,"w")
     (mean,var) = blockBootstrap(numpy.mean,N_OF_BINS,dAdKsis,N_OF_RUNS)
     wyputDoEnergiiSwobodnej.write( "dAdKsi = %f +/- %f\n" % (mean,numpy.sqrt(var)) )
     (mean,var) = blockBootstrap(numpy.mean,N_OF_BINS,zksis,N_OF_RUNS)
@@ -102,24 +150,26 @@ for angle in angles:
     
     tot = 0
     
-    for interaction in interactions: 
+    for interaction in INTERACTIONS: 
         start = time.clock()   
-        fileName = "matrices_angle=%.2f_timestep=0.002_twistPeriod=1000_nOfSamples=1000000_binWidth=0.05_idleSteps=50_interaction=%s.gz" % (angle,interaction)
+        fileName = PATH_TO_LARGE_OUTPUT+"matrices_prefix=%s_angle=%.2f_timestep=%s_twistPeriod=%d_nOfSamples=%d_binWidth=%s_idleSteps=%d_interaction=%s.gz" % (prefix,angle,str(timeStep),twistPeriod,nOfSamples,str(binWidth),idleSteps,interaction)
         print fileName
-        getSequences(fileName,interaction,angle,zksis)    
+        getSequences(fileName,interaction,angle,zksis,conf)    
         print "sequences loaded! (it took %.2f sec)" % (time.clock()-start)
-        
-        blockBootstrapVarianceWyput = open("blockBootstrapVariance_%s_%.2f.dat" % (interaction,angle),"w")
-        classicBootstrapVarianceWyput = open("classicBootstrapVariance_%s_%.2f.dat" % (interaction,angle),"w")
-        dumbVarianceWyput = open("dumbVariance_%s_%.2f.dat" % (interaction,angle),"w")
-        blockBootstrapMeanWyput = open("blockBootstrapMean_%s_%.2f.dat" % (interaction,angle),"w")
-        classicBootstrapMeanWyput = open("classicBootstrapMean_%s_%.2f.dat" % (interaction,angle),"w")
-        dumbBootstrapMeanWyput = open("dumbMean_%s_%.2f.dat" % (interaction,angle),"w")
-        
-        for row in xrange(10):
-            for column in xrange(row+1,11):
+            
+        blockBootstrapVarianceWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"blockBootstrapVariance_%s_%.2f.dat" % (interaction,angle),"w")
+        if CALC_CLASSIC_BOOTSTRAP:
+            classicBootstrapVarianceWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"classicBootstrapVariance_%s_%.2f.dat" % (interaction,angle),"w")
+        dumbVarianceWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"dumbVariance_%s_%.2f.dat" % (interaction,angle),"w")
+        blockBootstrapMeanWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"blockBootstrapMean_%s_%.2f.dat" % (interaction,angle),"w")
+        if CALC_CLASSIC_BOOTSTRAP:
+            classicBootstrapMeanWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"classicBootstrapMean_%s_%.2f.dat" % (interaction,angle),"w")
+        dumbBootstrapMeanWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"dumbMean_%s_%.2f.dat" % (interaction,angle),"w")
+     
+        for row in xrange(nOfAtoms-1):
+            for column in xrange(row+1,nOfAtoms):
                 start = time.clock() 
-                with open("tmp_%s_%.2f_%d_%d.dat" % (interaction,angle,row,column)) as wput:
+                with open(PATH_TO_BOOTSTRAP_OUTPUT+"tmp_%s_%.2f_%s_%d_%d.dat" % (interaction,angle,prefix,row,column)) as wput:
                     print "opening "+wput.name
                     print "calculating..."
                     start = time.clock() 
@@ -132,32 +182,38 @@ for angle in angles:
                     print "tot = ",tot
                     blockBootstrapVarianceWyput.write("%.15f " % tmp_var )
                     blockBootstrapMeanWyput.write("%.15f " % tmp_mean )
-                    print "...classicBootstrap..."
-                    (tmp_mean,tmp_var) = classicBootstrap(numpy.mean,seq_np,N_OF_RUNS)
-                    classicBootstrapVarianceWyput.write("%.15f " % tmp_var)
-                    classicBootstrapMeanWyput.write("%.15f " % tmp_mean)
+                    if CALC_CLASSIC_BOOTSTRAP:
+                        print "...classicBootstrap..."
+                        (tmp_mean,tmp_var) = classicBootstrap(numpy.mean,seq_np,N_OF_RUNS)
+                        classicBootstrapVarianceWyput.write("%.15f " % tmp_var)
+                        classicBootstrapMeanWyput.write("%.15f " % tmp_mean)
                     dumbVarianceWyput.write("%.15f " % (numpy.var(seq_np)/len(seq))) # TODO
                     dumbBootstrapMeanWyput.write("%.15f " % numpy.mean(seq_np)) # TODO
                     print "... whole took %.2f sec\n" % (time.clock()-start )
             blockBootstrapVarianceWyput.write("\n")
-            classicBootstrapVarianceWyput.write("\n")
+            if CALC_CLASSIC_BOOTSTRAP:
+                classicBootstrapVarianceWyput.write("\n")
             dumbVarianceWyput.write("\n")
             blockBootstrapMeanWyput.write("\n")
-            classicBootstrapMeanWyput.write("\n")
+            if CALC_CLASSIC_BOOTSTRAP:
+                classicBootstrapMeanWyput.write("\n")
             dumbBootstrapMeanWyput.write("\n")
-            
-            
-        for fileName in glob.glob("tmp_%s_%.2f_*dat" % (interaction,angle)):
+        
+           
+        for fileName in glob.glob("tmp_%s_%.2f_%s_*dat" % (interaction,angle,prefix)):
             os.remove(fileName)
-                    
+                
         blockBootstrapVarianceWyput.close()
-        classicBootstrapVarianceWyput.close()
+        if CALC_CLASSIC_BOOTSTRAP:
+            classicBootstrapVarianceWyput.close()
         dumbVarianceWyput.close()
         blockBootstrapMeanWyput.close()
-        classicBootstrapMeanWyput.close()
+        if CALC_CLASSIC_BOOTSTRAP:
+            classicBootstrapMeanWyput.close()
         dumbBootstrapMeanWyput.close()
-        
+    
     print "tot = ",tot
     (mean,var) = blockBootstrap(numpy.mean,N_OF_BINS,dAdKsis,N_OF_RUNS)
     print "dAdKsi = %f +/- %f\n" % (mean,numpy.sqrt(var))
-    
+ 
+
