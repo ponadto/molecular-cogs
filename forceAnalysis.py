@@ -1,11 +1,11 @@
 EXAMPLE = '''
 Exaple run:
 
-	python forceAnalysis.py -179.00 1,5,6,7
+	python forceAnalysis.py -179.00 ii-nh3
 
 where: 
 	-179.00 --- is the dihedral angle for which the simulation will be carried out
-	1,5,6,7 --- are the atom numbers used to calculate the dihedral angle
+	ii-nh3  --- is the molecule name for which the simulation will be ran (auxiliary data will be read from "ii-nh3.conf")
 '''
 
 
@@ -20,6 +20,7 @@ import gzip
 import os
 import glob
 import sys
+import smallFunctions
 
 
 # TODO:
@@ -28,19 +29,12 @@ import sys
 
 
 LARGE_OUTPUT = True
-PREFIX = "ii-nh3_forGAFF"
-MOL2_FILE_NAME = PREFIX+".mol2"
 FF_NAME = "GAFF" # GAFF MMFF94 UFF
 BOLTZMANN_CONSTANT = 0.001987 # [kcal/K/mol]
-BIN_WIDTH = 0.05
 TEMPERATURE = 300.
-TIMESTEP = 0.002
-TIMESTEP2 = TIMESTEP**2
-INV_TIMESTEP = 1./TIMESTEP
 IDLE_STEPS = 50
 MEMORY_BUFFER_SIZE = 20000
-PATH_TO_LARGE_OUTPUT = "/home/ponadto/Desktop/largeOutput/"
-NUxTIMESTEP = 0.01*TIMESTEP # for AndersenIntegrator
+PATH_TO_LARGE_OUTPUT = "/home/ponadto/Desktop/largeOutput2/"
     
     
     
@@ -148,7 +142,7 @@ class DataAndCalculations:
         return energy
             
             
-    def AndersenIntegrator(self,mol,relevantCoordinates,ff,h,reactionCoordinate):
+    def AndersenIntegrator(self,mol,relevantCoordinates,ff,h,reactionCoordinate,timeStep,timeStep2,nuTimesTimeStep):
         currCoords = self.coords[-1]
         currVelocity = self.velocity[-1]
         currAcc = self.acceleration[-1]
@@ -156,10 +150,10 @@ class DataAndCalculations:
         # calculating next position:  
         nextCoords = self.nOfAtomsX3*[0]
         for i in xrange(self.nOfAtomsX3):
-            nextCoords[i] = currCoords[i] + TIMESTEP*currVelocity[i] + currAcc[i]*TIMESTEP2/2 # nie jestem pewien tego currAcc
+            nextCoords[i] = currCoords[i] + timeStep*currVelocity[i] + currAcc[i]*timeStep2/2 # nie jestem pewien tego currAcc
         
         for i in xrange(self.nOfAtomsX3):
-            currVelocity[i] = currVelocity[i] + 0.5*TIMESTEP*currAcc[i] # that's the ACTUAL currentVelocity
+            currVelocity[i] = currVelocity[i] + 0.5*timeStep*currAcc[i] # that's the ACTUAL currentVelocity
             
         mol.SetCoordinates( openbabel.double_array(nextCoords) )   
         energy = self.calculateGradU(ff,mol)
@@ -182,11 +176,11 @@ class DataAndCalculations:
             
         # second velocity half-step
         for i in xrange(self.nOfAtomsX3):
-            currVelocity[i] = currVelocity[i] + 0.5*TIMESTEP*currAcc[i] # that's the ACTUAL currentVelocity
+            currVelocity[i] = currVelocity[i] + 0.5*timeStep*currAcc[i] # that's the ACTUAL currentVelocity
 
         # Andersen thermostat
         for i in xrange(self.nOfAtoms):
-            if random.random()<NUxTIMESTEP:
+            if random.random()<nuTimesTimeStep:
                 for j in xrange(3): currVelocity[3*i+j] = random.gauss(0,self.AndersenSigmas[3*i+j])
                        
         self.setNonVelocityAtribute(self.coords,nextCoords)
@@ -197,9 +191,9 @@ class DataAndCalculations:
         return energy
          
                       
-    def idleKSteps(self,K,mol,relevantCoordinates,ff,reactionCoordinate,h):      
+    def idleKSteps(self,K,mol,relevantCoordinates,ff,reactionCoordinate,h,timeStep,timeStep2,nuTimesTimeStep):      
         for i in xrange(K): 
-            self.AndersenIntegrator(mol,relevantCoordinates,ff,h,reactionCoordinate)
+            self.AndersenIntegrator(mol,relevantCoordinates,ff,h,reactionCoordinate,timeStep,timeStep2,nuTimesTimeStep)
 
             
         
@@ -219,13 +213,13 @@ class DataAndCalculations:
             self.setNonVelocityAtribute(self.ksiMomentum,ksiMomentum)
     
         
-    def getTimeDerivativeOfKsiMomentum(self):
+    def getTimeDerivativeOfKsiMomentum(self,timeStep):
         '''
             Calculated at t-dt
         '''
         if all(self.ksiMomentum)==False: # all need to be != None
             return None
-        return (self.ksiMomentum[-1]-self.ksiMomentum[-3])/2./TIMESTEP
+        return (self.ksiMomentum[-1]-self.ksiMomentum[-3])/2./timeStep
             
             
     def calculateHessianDiagonal(self,mol,relevantCoordinates,reactionCoordinate,h):        
@@ -719,9 +713,22 @@ def checkHessians(mol,ff,angle,nOfSamples,nOfStepsInBetween,twistPeriod):
     print "which takes %f sec" % (100*(time.clock()-start))
 
                                                                                         
-def samplingWithConstantReactionCoordinate(mol,whichAtomsForDih,ff,angle,nOfSamples,nOfStepsInBetween,twistPeriod):
+def samplingWithConstantReactionCoordinate(mol,conf,ff,angle):
     
     assert mol != None and ff != None
+    
+    whichAtomsForDih = conf["whichAtomsForDih"]
+    if "whichAtomsForAux" in conf:
+        whichAtomsForAux = conf["whichAtomsForAux"]
+    prefix = conf["prefix"]
+    nOfSamples = conf["nOfSamples"]
+    nOfStepsInBetween = conf["nOfStepsInBetween"]
+    twistPeriod = conf["twistPeriod"]
+    nuTimesTimeStep = conf["nuTimesTimeStep"]
+    timeStep = conf["timeStep"]
+    timeStep2 = conf["timeStep2"]
+    binWidth = conf["binWidth"]
+    idleSteps = conf["idleSteps"]
         
     random.seed(13) 
     relevantCoordinates = []
@@ -731,7 +738,7 @@ def samplingWithConstantReactionCoordinate(mol,whichAtomsForDih,ff,angle,nOfSamp
     # for testing purposes
     # relevantCoordinates = [i for i in xrange(33)]
     
-    # constants:
+    # constants
     h = 0.0001 # 10^-4 seemed best
     def reactionCoordinate(x): 
         return calcDih(x,whichAtomsForDih)
@@ -766,32 +773,32 @@ def samplingWithConstantReactionCoordinate(mol,whichAtomsForDih,ff,angle,nOfSamp
     
     # quality / speed testing:
     noShiftTimes = []
-    dihedrals_HNCC = []
+    dihedrals_aux = []
     shiftTime = 0
     nOfAccepts = 0
     
     # tmp for simulation purposes:
     coords = [ 0 ] * 3*nOfAtoms
         
-    convergenceOutput = open("convOutput_angle=%.2f_timestep=%s_twistPeriod=%d_nOfSamples=%d_binWidth=%s_idleSteps=%d.dat" % (angle,str(TIMESTEP),twistPeriod,nOfSamples,str(BIN_WIDTH),IDLE_STEPS),"w")
+    convergenceOutput = open("convOutput_angle=%.2f_timestep=%s_twistPeriod=%d_nOfSamples=%d_binWidth=%s_idleSteps=%d.dat" % (angle,str(timeStep),twistPeriod,nOfSamples,str(binWidth),IDLE_STEPS),"w")
     convergenceOutput.write( "ZksiToMinusHalf_ACCUMULATED\tdAdKsi-<m_ksi gradU.M^(-1).gradKsi>\tdAdKsi\t\t<m_ksi gradU.M^(-1).gradKsi>\t-<v.grad(m_ksi gradKsi).v>\t-kT<m_ksi div(M^(-1).gradKsi)>\n" )
 
     gatherStatisticsFlag = False
     start = time.clock() 
     
     if LARGE_OUTPUT:
-        generalOutputStream = gzip.open(PATH_TO_LARGE_OUTPUT+"generalOutput_angle=%.2f_timestep=%s_twistPeriod=%d_nOfSamples=%d_binWidth=%s_idleSteps=%d.gz" % (angle,str(TIMESTEP),twistPeriod,nOfSamples,str(BIN_WIDTH),IDLE_STEPS),"wb")
-        generalOutputStream.write("dihedral\t\t\tdihedral_HNCC\t\t\tenergy\t\t\tdAdKsi\t\t\t<...gradU...>\t\t\tZksi\n")
+        generalOutputStream = gzip.open(PATH_TO_LARGE_OUTPUT+"generalOutput_prefix=%s_angle=%.2f_timestep=%s_twistPeriod=%d_nOfSamples=%d_binWidth=%s_idleSteps=%d.gz" % (prefix,angle,str(timeStep),twistPeriod,nOfSamples,str(binWidth),idleSteps),"wb")
+        generalOutputStream.write("dihedral\t\t\tdihedral_aux\t\t\tenergy\t\t\tdAdKsi\t\t\t<...gradU...>\t\t\tZksi\n")
         fullMatricesOutputStreams = {}
         for key in allProductsMatrices_ACCUMULATED.keys():
-            fullMatricesOutputStreams[key] = gzip.open(PATH_TO_LARGE_OUTPUT+"matrices_angle=%.2f_timestep=%s_twistPeriod=%d_nOfSamples=%d_binWidth=%s_idleSteps=%d_interaction=%s.gz" % (angle,str(TIMESTEP),twistPeriod,nOfSamples,str(BIN_WIDTH),IDLE_STEPS,key),"w")
+            fullMatricesOutputStreams[key] = gzip.open(PATH_TO_LARGE_OUTPUT+"matrices_prefix=%s_angle=%.2f_timestep=%s_twistPeriod=%d_nOfSamples=%d_binWidth=%s_idleSteps=%d_interaction=%s.gz" % (prefix,angle,str(timeStep),twistPeriod,nOfSamples,str(binWidth),idleSteps,key),"w")
          
     allProductsMatrices = MEMORY_BUFFER_SIZE * [ None ]
          
     for iteration in xrange(nOfSamples*nOfStepsInBetween):
         
         if gatherStatisticsFlag==False:
-            dataCalculator.idleKSteps(IDLE_STEPS,mol,relevantCoordinates,ff,reactionCoordinate,h)
+            dataCalculator.idleKSteps(idleSteps,mol,relevantCoordinates,ff,reactionCoordinate,h,timeStep,timeStep2,nuTimesTimeStep)
             gatherStatisticsFlag = True
         else:
             #gradKsi = calcGrad(mol,reactionCoordinate,h)
@@ -799,9 +806,9 @@ def samplingWithConstantReactionCoordinate(mol,whichAtomsForDih,ff,angle,nOfSamp
             #energy = dataCalculator.calculateGradU(ff,mol) this is now in the AndersenIntegrator method
                           
             # ONE STEP OF SIMULATION:
-            energy = dataCalculator.AndersenIntegrator(mol,relevantCoordinates,ff,h,reactionCoordinate)
+            energy = dataCalculator.AndersenIntegrator(mol,relevantCoordinates,ff,h,reactionCoordinate,timeStep,timeStep2,nuTimesTimeStep)
             
-            if numpy.abs(reactionCoordinate(mol)-angle)>BIN_WIDTH:
+            if numpy.abs(reactionCoordinate(mol)-angle)>binWidth:
                 print "dihedral = ",reactionCoordinate(mol)
                 mol.SetTorsion(whichAtomsForDih[0],whichAtomsForDih[1],whichAtomsForDih[2],whichAtomsForDih[3],angle*math.pi/180.)
                 tmp = openbabel.doubleArray_frompointer(mol.GetCoordinates())
@@ -810,7 +817,7 @@ def samplingWithConstantReactionCoordinate(mol,whichAtomsForDih,ff,angle,nOfSamp
                 print "shift!!!!"      
                 newAngle = reactionCoordinate(mol)
                 print "now it's dihedral = ",newAngle
-                if numpy.abs(newAngle-angle)>BIN_WIDTH:
+                if numpy.abs(newAngle-angle)>binWidth:
                     print "WARNING!!!"
                     obConversion.WriteFile(mol,"ERROR_ANGLE=%.3f_ENERGY=%.5f.mol2" % (angle,energy))
                     os.exit()
@@ -841,7 +848,10 @@ def samplingWithConstantReactionCoordinate(mol,whichAtomsForDih,ff,angle,nOfSamp
                 ZksiToMinusHalf = Zksi**(-0.5)
                 ZksiToMinusHalf_ACCUMULATED += ZksiToMinusHalf
                 dAdKsis[index] = tmp_dAdKsi / ZksiToMinusHalf 
-                dihedrals_HNCC.append( mol.GetTorsion(2,1,5,6) ) 
+                if "whichAtomsForAux" in conf:
+                    dihedrals_aux.append( mol.GetTorsion(*whichAtomsForAux) ) 
+                else:
+                    dihedrals_aux.append( -10000 )
                 dihedral = reactionCoordinate(mol)
                 energies[index] = energy  
                 dihedrals[index] = dihedral    
@@ -853,15 +863,15 @@ def samplingWithConstantReactionCoordinate(mol,whichAtomsForDih,ff,angle,nOfSamp
                 fillOutProductsMatrices(products,productsMatrices)
                 addToAllProductsMatrices(allProductsMatrices_ACCUMULATED,productsMatrices,nOfAtoms,ZksiToMinusHalf) # it's where productsMatrices are multiplied by ZksiToMinusHalf
                 allProductsMatrices[index] = productsMatrices
-                if numpy.abs(dihedrals[index]-angle)>BIN_WIDTH:
-			        print "gathering WRONG stats for dihedral = ",dihedrals[-1]
-		            os.exit()
+                if numpy.abs(dihedrals[index]-angle)>binWidth:
+                    print "gathering WRONG stats for dihedral = ",dihedrals[-1]
+                    sys.exit(1)
                 if energies[-1] != None:
                     if LARGE_OUTPUT:
                         for i in xrange(MEMORY_BUFFER_SIZE):
 				generalOutputStream.write( 
 					"%f\t\t\t%f\t\t\t%f\t\t\t%f\t\t\t%f\t\t\t%f\n" % (dihedrals[i],
-											dihedrals_HNCC[i],
+											dihedrals_aux[i],
 											energies[i],
 											dAdKsis[i],
 											mksi_gradU_invMasses_gradKsis[i],
@@ -877,7 +887,7 @@ def samplingWithConstantReactionCoordinate(mol,whichAtomsForDih,ff,angle,nOfSamp
                             for key in fullMatricesOutputStreams.keys():
                                 for row in allProductsMatrices[i][key]:
                                     for elementInRow in row:
-                                        if abs(elementInRow)>0.000001: fullMatricesOutputStreams[key].write( "%f " % elementInRow )
+                                        if abs(elementInRow)>0.000000000000: fullMatricesOutputStreams[key].write( "%f " % elementInRow )
                                         else: fullMatricesOutputStreams[key].write( "0 " )
                                     fullMatricesOutputStreams[key].write( "\n" )
                     allProductsMatrices = MEMORY_BUFFER_SIZE * [ None ]
@@ -897,10 +907,10 @@ def samplingWithConstantReactionCoordinate(mol,whichAtomsForDih,ff,angle,nOfSamp
             #mol.SetCoordinates( openbabel.double_array(nextCoords) )   now in the AndersenIntegrator
             
             # CHECKING THE H-N-C-C DIHEDRAL ANGLE:
-            if numpy.mod(iteration+1,twistPeriod)==0:
-                oldAngle = mol.GetTorsion(2,1,5,6)
+            if "whichAtomsForAux" in conf and numpy.mod(iteration+1,twistPeriod)==0:
+                oldAngle = mol.GetTorsion(*whichAtomsForAux)
                 newAngle = random.random()*359.999-179.999
-                mol.SetTorsion(6,5,1,2,newAngle*math.pi/180.)
+                mol.SetTorsion(whichAtomsForAux[3],whichAtomsForAux[2],whichAtomsForAux[1],whichAtomsForAux[0],newAngle*math.pi/180.)
                 ff.Setup(mol)
                 newEnergy = ff.Energy()
                 if newEnergy <= energy or math.exp((energy-newEnergy)/BOLTZMANN_CONSTANT/TEMPERATURE) > random.random():
@@ -911,19 +921,19 @@ def samplingWithConstantReactionCoordinate(mol,whichAtomsForDih,ff,angle,nOfSamp
                     nOfAccepts += 1
                     gatherStatisticsFlag = False
                 else:
-                    mol.SetTorsion(6,5,1,2,oldAngle*math.pi/180.)
+                    mol.SetTorsion(whichAtomsForAux[3],whichAtomsForAux[2],whichAtomsForAux[1],whichAtomsForAux[0],oldAngle*math.pi/180.)
                     
                     
 
       
     if LARGE_OUTPUT:
-        for i in xrange(index): generalOutputStream.write( "%f\t\t\t%f\t\t\t%f\t\t\t%f\t\t\t%f\t\t\t%f\n" % (dihedrals[i],dihedrals_HNCC[i],energies[i],dAdKsis[i],mksi_gradU_invMasses_gradKsis[i],Zksis[i]) )
+        for i in xrange(index): generalOutputStream.write( "%f\t\t\t%f\t\t\t%f\t\t\t%f\t\t\t%f\t\t\t%f\n" % (dihedrals[i],dihedrals_aux[i],energies[i],dAdKsis[i],mksi_gradU_invMasses_gradKsis[i],Zksis[i]) )
         generalOutputStream.close()        
         for key in fullMatricesOutputStreams.keys():
             for i in xrange(index):
                 for row in allProductsMatrices[i][key]:
                     for elementInRow in row:
-                        if abs(elementInRow)>0.000001: fullMatricesOutputStreams[key].write( "%f " % elementInRow )
+                        if abs(elementInRow)>0.00000000000: fullMatricesOutputStreams[key].write( "%f " % elementInRow )
                         else: fullMatricesOutputStreams[key].write( "0 " )
                     fullMatricesOutputStreams[key].write( "\n" )
             fullMatricesOutputStreams[key].close()
@@ -936,75 +946,72 @@ def samplingWithConstantReactionCoordinate(mol,whichAtomsForDih,ff,angle,nOfSamp
                 check_ACCUMULATED += allProductsMatrices_ACCUMULATED[key][i][j]
                 
                 
-    fileNames = glob.glob("./lowestEnergyConfigurations/ii-nh3*ANGLE=%.3f*" % angle)
+    fileNames = glob.glob("./lowestEnergyConfigurations/%s*ANGLE=%.3f*" % (conf["prefix"],angle) )
     if len(fileNames)>1:
         print "what?"
     elif len(fileNames)==1:
         lowestEnergySoFar = float(fileNames[0].split("ENERGY=")[1].split(".mol2")[0])
         if lowestEnergySoFar>lowestEnergy:
-            obConversion.WriteFile(configurationWithLowestEnergy,"./lowestEnergyConfigurations/ii-nh3_forGAFF_ANGLE=%.3f_ENERGY=%.5f.mol2" % (angle,lowestEnergy))
+            obConversion.WriteFile(configurationWithLowestEnergy,"./lowestEnergyConfigurations/%s_ANGLE=%.3f_ENERGY=%.5f.mol2" % (conf["prefix"],angle,lowestEnergy))
             os.remove(fileNames[0])
     elif len(fileNames)==0:
-        obConversion.WriteFile(configurationWithLowestEnergy,"./lowestEnergyConfigurations/ii-nh3_forGAFF_ANGLE=%.3f_ENERGY=%.5f.mol2" % (angle,lowestEnergy))
+        obConversion.WriteFile(configurationWithLowestEnergy,"./lowestEnergyConfigurations/%s_ANGLE=%.3f_ENERGY=%.5f.mol2" % (conf["prefix"],angle,lowestEnergy))
+   
+    print
+    print "The following two quantities should be approximately equal:"
+    print "check_ACCUMULATED = \t\t\t\t",check_ACCUMULATED/2
+    print "mksi_gradU_invMasses_gradKsi_ACCUMULATED = \t",mksi_gradU_invMasses_gradKsi_ACCUMULATED/ZksiToMinusHalf_ACCUMULATED
     
-    print "check_ACCUMULATED = ",check_ACCUMULATED/2
-    print "mksi_gradU_invMasses_gradKsi_ACCUMULATED = ",mksi_gradU_invMasses_gradKsi_ACCUMULATED/ZksiToMinusHalf_ACCUMULATED
-
-    
+    print 
+    print "Probability of acceptance in the Monte Carlo shifts keeping the right dihedral angle: "
     print "P(acc) = ",  float(nOfAccepts) / nOfSamples / nOfStepsInBetween * twistPeriod
-    print "mean shift time = ",numpy.mean(noShiftTimes)
+    print "With a mean shift time of ",int(numpy.mean(noShiftTimes))
     
     convergenceOutput.close()
     
     return allProductsMatrices_ACCUMULATED, noShiftTimes, ZksiToMinusHalf_ACCUMULATED
     
     
-def matrixForm(productsMatrices):
-    for key in productsMatrices.keys():
-        print "%s: " % key
-        for line in productsMatrices[key]:
-            print " ".join(["%f\t" % number for number in line])
-        print
 
-def drange(start, stop, step):
-     r = start
-     while r < stop:
-     	yield r
-     	r += step
-              
+
+
+
+
+
+
+
+
+
+
 if __name__=="__main__":
-    import sys # for reading in command line arguments
     try:
         angle = sys.argv[1]
-        whichAtomsForDih = tuple([int(i) for i in sys.argv[2].split(",") ]) # used to define the dihedral angle
+        prefix = sys.argv[2]
     except IndexError:
         print "Wrong arguments"
         print EXAMPLE
         sys.exit(1)
-    
+   
+    conf = smallFunctions.parseConf(prefix)
+
     # define Open Babel objects needed to carry out the simulation
     obConversion = openbabel.OBConversion()
     obConversion.SetInAndOutFormats("mol2", "mol2")
     mol = openbabel.OBMol()
-    obConversion.ReadFile(mol, MOL2_FILE_NAME)
+    obConversion.ReadFile(mol, conf["mol2FileName"])
     ff = openbabel.OBForceField.FindForceField(FF_NAME)    
 
-    
-    # define simulation parameters  
-    nOfSamples = 10**3
-    twistPeriod = 100 
-    nOfStepsInBetween = 1
+    for key in sorted(conf.keys()):
+        print "%s = %s" % (key,str(conf[key]))
 
-    
     import pickle
     angle = int(100*float(angle))/100.
-    allProductsMatrices_ACCUMULATED, noShiftTimes, ZksiToMinusHalf_ACCUMULATED = samplingWithConstantReactionCoordinate(mol,whichAtomsForDih,ff,angle,nOfSamples,nOfStepsInBetween,twistPeriod)
+    allProductsMatrices_ACCUMULATED, noShiftTimes, ZksiToMinusHalf_ACCUMULATED = samplingWithConstantReactionCoordinate(mol,conf,ff,angle)
         
         
     for interaction in allProductsMatrices_ACCUMULATED.keys():
-        stream = open("productsMatrices/%s/angle=%.2f_interaction=%s_timestep=%s_twistPeriod=%d_nOfSamples=%d_binWidth=%s_idleSteps=%d.dat" % (PREFIX,angle,interaction,str(TIMESTEP),twistPeriod,nOfSamples,str(BIN_WIDTH),IDLE_STEPS),"w")
+        stream = open("productsMatrices/%s/angle=%.2f_interaction=%s_timestep=%s_twistPeriod=%d_nOfSamples=%d_binWidth=%s_idleSteps=%d.dat" % (prefix,angle,interaction,str(conf["timeStep"]),conf["twistPeriod"],conf["nOfSamples"],str(conf["binWidth"]),conf["idleSteps"]),"w")
         for line in allProductsMatrices_ACCUMULATED[interaction]:
             stream.write(" ".join(["%f\t" % number for number in line])+"\n")
         stream.close()
-
     

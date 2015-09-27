@@ -139,7 +139,7 @@ if __name__=="__main__":
             gradUgradKsi = float(words[4])
             entropic.append( (dAdKsi-gradUgradKsi)*zksi**(-0.5) )
     
-    wyputDoEnergiiSwobodnej = open(PATH_TO_BOOTSTRAP_OUTPUT+"dAdKsiAndZksi=%.2f.dat"%angle,"w")
+    wyputDoEnergiiSwobodnej = open(PATH_TO_BOOTSTRAP_OUTPUT+"dAdKsiAndZksi=%.2f_%s.dat"%(angle,prefix),"w")
     (mean,var) = blockBootstrap(numpy.mean,N_OF_BINS,dAdKsis,N_OF_RUNS)
     wyputDoEnergiiSwobodnej.write( "dAdKsi = %f +/- %f\n" % (mean,numpy.sqrt(var)) )
     (mean,var) = blockBootstrap(numpy.mean,N_OF_BINS,zksis,N_OF_RUNS)
@@ -157,14 +157,14 @@ if __name__=="__main__":
         getSequences(fileName,interaction,angle,zksis,conf)    
         print "sequences loaded! (it took %.2f sec)" % (time.clock()-start)
             
-        blockBootstrapVarianceWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"blockBootstrapVariance_%s_%.2f.dat" % (interaction,angle),"w")
+        blockBootstrapVarianceWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"blockBootstrapVariance_%s_%.2f_%s.dat" % (interaction,angle,prefix),"w")
         if CALC_CLASSIC_BOOTSTRAP:
-            classicBootstrapVarianceWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"classicBootstrapVariance_%s_%.2f.dat" % (interaction,angle),"w")
-        dumbVarianceWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"dumbVariance_%s_%.2f.dat" % (interaction,angle),"w")
-        blockBootstrapMeanWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"blockBootstrapMean_%s_%.2f.dat" % (interaction,angle),"w")
+            classicBootstrapVarianceWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"classicBootstrapVariance_%s_%.2f_%s.dat" % (interaction,angle,prefix),"w")
+        dumbVarianceWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"dumbVariance_%s_%.2f_%s.dat" % (interaction,angle,prefix),"w")
+        blockBootstrapMeanWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"blockBootstrapMean_%s_%.2f_%s.dat" % (interaction,angle,prefix),"w")
         if CALC_CLASSIC_BOOTSTRAP:
-            classicBootstrapMeanWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"classicBootstrapMean_%s_%.2f.dat" % (interaction,angle),"w")
-        dumbBootstrapMeanWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"dumbMean_%s_%.2f.dat" % (interaction,angle),"w")
+            classicBootstrapMeanWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"classicBootstrapMean_%s_%.2f_%s.dat" % (interaction,angle,prefix),"w")
+        dumbBootstrapMeanWyput = open(PATH_TO_BOOTSTRAP_OUTPUT+"dumbMean_%s_%.2f_%s.dat" % (interaction,angle,prefix),"w")
      
         for row in xrange(nOfAtoms-1):
             for column in xrange(row+1,nOfAtoms):
