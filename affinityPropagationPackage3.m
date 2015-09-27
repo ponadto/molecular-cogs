@@ -11,19 +11,39 @@ affinityPropagation2andAHalf::usage="";
 packMatrix::usage="";
 unpackClustering::usage="";
 getMats::usage="";
-score1::usage="";
-score2::usage="";
 inputMatrixPath::usage="";
 inputdAdKsiPath::usage="";
 myTotal::usage="";
 
 
-INTERACTIONS:={"bonds","angle","tors","vdw","ele"};(*,"oop"};*)(interactionPosition[INTERACTIONS[[#]]]:=#)&/@Range[Length[INTERACTIONS]];
+PREFIX:="ii-ccl";
+INTERACTIONS:={"bonds","angle","tors","vdw","ele"};(*,"oop"};*)
+(interactionPosition[INTERACTIONS[[#]]]:=#)&/@Range[Length[INTERACTIONS]];
 DIHEDRALS=ToString[NumberForm[#,{4,2}]]&/@Table[i,{i,-179,-60,0.5}];
 (dihedralPosition[DIHEDRALS[[#]]]:=#)&/@Range[Length[DIHEDRALS]];
-ATOMS:={"N1","H2","H3","H4","C5","C6","I7","I8","H9","H10","H11"};
-NUMBERS={"1","2","3","4","5","6","7","8","9","10","11"};
 N\[LetterSpace]OF\[LetterSpace]ITERATIONS:=50;
+MOL2\[LetterSpace]FILE\[LetterSpace]NAME="";
+N\[LetterSpace]OF\[LetterSpace]ATOMS=0;
+tmp=StringSplit[#]&/@Import[PREFIX<>".conf","CSV"];
+Do[
+If[tmp[[i,1,1]]=="mol2FileName",MOL2\[LetterSpace]FILE\[LetterSpace]NAME=tmp[[i,1,2]]];
+If[tmp[[i,1,1]]=="nOfAtoms",N\[LetterSpace]OF\[LetterSpace]ATOMS=ToExpression[tmp[[i,1,2]]]];
+,{i,1,Length[tmp]}];
+
+atomNumber=1;
+tmp=StringSplit[#]&/@Import[MOL2\[LetterSpace]FILE\[LetterSpace]NAME,"CSV"];
+ATOMS={};
+NUMBERS={};
+Do[
+If[Length[tmp[[i,1]]]>0&&tmp[[i,1,1]]==ToString[atomNumber],
+AppendTo[ATOMS,tmp[[i,1,2]]];
+AppendTo[NUMBERS,ToString[atomNumber]];
+atomNumber=atomNumber+1;
+];
+,{i,1,Length[tmp]}];
+
+(*ATOMS:={"N1","H2","H3","H4","C5","C6","I7","I8","H9","H10","H11"};
+NUMBERS={"1","2","3","4","5","6","7","8","9","10","11"};*)
 
 
 Begin["`Private`"];
@@ -35,8 +55,8 @@ myMatrixPlot[mat_,which_,textSize_,size_]:=MatrixPlot[mat,FrameTicks->{{Range[Le
 myMatrixPlot[mat_]:=myMatrixPlot[mat,Range[Length[ATOMS]],16];
 myMatrixPlotWithNumbers[mat_,which_,textSize_,size_]:=MatrixPlot[mat,FrameTicks->{{Range[Length[NUMBERS[[which]]]],NUMBERS[[which]]}\[Transpose],{Range[Length[NUMBERS[[which]]]],Rotate[#,0 Degree]&/@NUMBERS[[which]]}\[Transpose]},FrameStyle->Opacity[0],FrameTicksStyle->Directive[Opacity[1],Bold,Black,textSize-6],Mesh->True,ImageSize->size]
 
-inputMatrixPath[angle_,interaction_,what_]:="matrices4/blockBootstrap"<>what<>"_"<>interaction<>"_"<>ToString[angle]<>".dat";
-inputdAdKsiPath[angle_]:="matrices4/dAdKsiAndZksi="<>angle<>".dat";
+inputMatrixPath[angle_,interaction_,what_]:="bootstrapOutput/blockBootstrap"<>what<>"_"<>interaction<>"_"<>ToString[angle]<>"_"<>PREFIX<>".dat";
+inputdAdKsiPath[angle_]:="bootstrapOutput/dAdKsiAndZksi="<>angle<>"_"<>PREFIX<>".dat";
 
 reapForOneAngle[angle_,what_]:=Module[{tmp,dim,mats,zksis},
 
@@ -44,7 +64,7 @@ mats=Reap[
 Do[
 tmp=Import[inputMatrixPath[angle,INTERACTIONS[[i]],what],"Data"];
 AppendTo[tmp,{}];
-tmp=PadLeft[#,11]&/@tmp;
+tmp=PadLeft[#,Length[ATOMS]]&/@tmp;
 tmp=tmp+tmp\[Transpose];
 Sow[tmp];
 ,
@@ -234,70 +254,9 @@ unpackedClustering[[whichNonZero[[i]]]]=clustering[[i]]
 unpackedClustering
 ];
 myTotal[list_]:=If[Length[list]==0,Return[0],Total[list]];
-score1[clustering_,mat_]:=Module[{tmp,flatMat,which,plusMat,minusMat,gravityScore,clarityScore,flatMutualMat},
-
-flatMat=Flatten[mat];
-
-If[Abs[Total[clustering]]==Length[mat]-1,(*one gear consists of only one atom*)
-Return[0];
-];
-
-If[Abs[Total[clustering]]==Length[mat],
-tmp=Total[Total[mat]];
-If[tmp>0,
-Return[0.5*{tmp/Total[Select[flatMat,#>0&]],0}];
-,
-Return[0.5*{tmp/Total[Select[flatMat,#<0&]],0}];
-];
-];
-
-which=Flatten[Position[clustering,#]]&/@{-1,1};
-plusMat=mat[[which[[2]],which[[2]]]];
-minusMat=mat[[which[[1]],which[[1]]]];
-
-gravityScore=0.5*(myTotal[myTotal[plusMat]]/myTotal[Select[flatMat,#>0&]]+myTotal[myTotal[minusMat]]/myTotal[Select[flatMat,#<0&]]);
-flatMutualMat=Flatten[mat[[which[[1]],which[[2]]]]];
-(*clarityScore=(myTotal[Select[flatMutualMat,#>0&]]/myTotal[Select[flatMat,#>0&]]+myTotal[Select[flatMutualMat,#<0&]]/myTotal[Select[flatMat,#<0&]]);*)
-(*clarityScore=myTotal[Abs/@flatMutualMat]/myTotal[Abs/@flatMat];*)
-clarityScore=0;
-{gravityScore,-clarityScore}
-];
 
 
-score2[clustering_,mat_]:=Module[{tmp,flatMat,which,plusMat,minusMat,lambda,gravityScore,clarityScore,flatMutualMat},
 
-flatMat=Flatten[mat];
-
-(*Print["clustering = ",clustering];*)
-If[Abs[Total[clustering]]==Length[mat],
-tmp=Total[Total[mat]];
-If[tmp>0,
-Return[{tmp/Total[Select[flatMat,#>0&]],0}];
-,
-Return[{tmp/Total[Select[flatMat,#<0&]],0}];
-];
-];
-
-(*Print[plotBlockLikeSimMat[clustering+5,mat]];*)
-which=Flatten[Position[clustering,#]]&/@{-1,1};
-plusMat=mat[[which[[2]],which[[2]]]];
-minusMat=mat[[which[[1]],which[[1]]]];
-
-lambda=Length[plusMat]/Length[mat];
-(*
-If[Total[Total[plusMat]]<0||Total[Total[minusMat]]>0,
-Return[{0,0}];
-];
-*)
-gravityScore=lambda*Total[Total[plusMat]]/Total[Select[flatMat,#>0&]]+(1-lambda)*Total[Total[minusMat]]/Total[Select[flatMat,#<0&]];
-flatMutualMat=Flatten[mat[[which[[1]],which[[2]]]]];
-clarityScore=(Total[Select[flatMutualMat,#>0&]]/Total[Select[flatMat,#>0&]]+Total[Select[flatMutualMat,#<0&]]/Total[Select[flatMat,#<0&]]);
-(*Print["gravityScore = ",gravityScore];
-Print["clarityScore = ",clarityScore];
-Print["total score = ",gravityScore-clarityScore];*)
-
-{gravityScore,-clarityScore}
-];
 
 
 
