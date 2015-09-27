@@ -1,14 +1,26 @@
+EXAMPLE = '''
+Exaple run:
+
+	python forceAnalysis.py -179.00 1,5,6,7
+
+where: 
+	-179.00 --- is the dihedral angle for which the simulation will be carried out
+	1,5,6,7 --- are the atom numbers used to calculate the dihedral angle
+'''
+
+
 import openbabel
 import numpy
 import math
 import random
 import time
 import operator
-import pylab
 from itertools import izip
 import gzip
 import os
 import glob
+import sys
+
 
 # TODO:
 # popraw: 
@@ -17,13 +29,6 @@ import glob
 
 LARGE_OUTPUT = True
 PREFIX = "ii-nh3_forGAFF"
-WHICH_ATOMS = (1,5,6,7) # used to define the dihedral angle
-RELEVANT_COORDINATES = []
-for atomNumber in WHICH_ATOMS:
-    for i in xrange(3):
-        RELEVANT_COORDINATES.append(3*(atomNumber-1)+i)
-# FOR TESTING PURPOSES:
-#RELEVANT_COORDINATES = [i for i in xrange(33)]
 MOL2_FILE_NAME = PREFIX+".mol2"
 FF_NAME = "GAFF" # GAFF MMFF94 UFF
 BOLTZMANN_CONSTANT = 0.001987 # [kcal/K/mol]
@@ -143,7 +148,7 @@ class DataAndCalculations:
         return energy
             
             
-    def AndersenIntegrator(self,mol,ff,h,reactionCoordinate):
+    def AndersenIntegrator(self,mol,relevantCoordinates,ff,h,reactionCoordinate):
         currCoords = self.coords[-1]
         currVelocity = self.velocity[-1]
         currAcc = self.acceleration[-1]
@@ -158,7 +163,7 @@ class DataAndCalculations:
             
         mol.SetCoordinates( openbabel.double_array(nextCoords) )   
         energy = self.calculateGradU(ff,mol)
-        gradKsi = calcGrad(mol,reactionCoordinate,h)
+        gradKsi = calcGrad(mol,relevantCoordinates,reactionCoordinate,h)
         self.calculateZksi( gradKsi )
         
         Zksi = self.Zksi[-1]
@@ -192,9 +197,9 @@ class DataAndCalculations:
         return energy
          
                       
-    def idleKSteps(self,K,mol,ff,reactionCoordinate,h):      
+    def idleKSteps(self,K,mol,relevantCoordinates,ff,reactionCoordinate,h):      
         for i in xrange(K): 
-            self.AndersenIntegrator(mol,ff,h,reactionCoordinate)
+            self.AndersenIntegrator(mol,relevantCoordinates,ff,h,reactionCoordinate)
 
             
         
@@ -223,13 +228,13 @@ class DataAndCalculations:
         return (self.ksiMomentum[-1]-self.ksiMomentum[-3])/2./TIMESTEP
             
             
-    def calculateHessianDiagonal(self,mol,reactionCoordinate,h):        
+    def calculateHessianDiagonal(self,mol,relevantCoordinates,reactionCoordinate,h):        
         hessian =  [ [ 0 for i in xrange(self.nOfAtomsX3)  ] for j in xrange(self.nOfAtomsX3) ]
         currentReactionCoordinateValue = reactionCoordinate(mol)
         nOfAtoms = mol.NumAtoms()
         tmp = openbabel.doubleArray_frompointer(mol.GetCoordinates())
 
-        for i in RELEVANT_COORDINATES:
+        for i in relevantCoordinates:
             hessian[i][i] = calcSecondDerivativeInOneCoordinate(mol,nOfAtoms,reactionCoordinate,currentReactionCoordinateValue,h,i,tmp)
         self.setNonVelocityAtribute( self.hessian, hessian )
             
@@ -361,10 +366,10 @@ def multVecMatVec(vec1,mat,vec2):
             total += vec1[i] * mat[i][j] * vec2[j]
     return total
 
-def calcDih(mol,WHICH_ATOMS):
-    return mol.GetTorsion(*WHICH_ATOMS)
+def calcDih(mol,whichAtomsForDih):
+    return mol.GetTorsion(*whichAtomsForDih)
         
-def calcDihWithCenterOfMass(mol,WHICH_ATOMS,WHICH_ATOMSBelongToGroup,masses):
+def calcDihWithCenterOfMass(mol,whichAtomsForDih,WHICH_ATOMSBelongToGroup,masses):
     centerOfMass = [0.0,0.0,0.0]
     for atomIndex in WHICH_ATOMSBelongToGroup:
         mass = masses[atomIndex-1]
@@ -373,11 +378,11 @@ def calcDihWithCenterOfMass(mol,WHICH_ATOMS,WHICH_ATOMSBelongToGroup,masses):
         centerOfMass[1] += vec.GetY()*mass
         centerOfMass[2] += vec.GetZ()*mass
     centerOfMass = multVec(1.0/len(WHICH_ATOMSBelongToGroup),centerOfMass)
-    theActualPosition = mol.GetAtom(WHICH_ATOMS[0]).GetVector()
+    theActualPosition = mol.GetAtom(whichAtomsForDih[0]).GetVector()
     theActualPosition = [theActualPosition.GetX(),theActualPosition.GetY(),theActualPosition.GetZ()]
-    mol.GetAtom(WHICH_ATOMS[0]).SetVector(centerOfMass[0],centerOfMass[1],centerOfMass[2])
-    tor = mol.GetTorsion(*WHICH_ATOMS)
-    mol.GetAtom(WHICH_ATOMS[0]).SetVector(theActualPosition[0],theActualPosition[1],theActualPosition[2])
+    mol.GetAtom(whichAtomsForDih[0]).SetVector(centerOfMass[0],centerOfMass[1],centerOfMass[2])
+    tor = mol.GetTorsion(*whichAtomsForDih)
+    mol.GetAtom(whichAtomsForDih[0]).SetVector(theActualPosition[0],theActualPosition[1],theActualPosition[2])
     return tor  
             
 '''def calcDirectionalGrad(mol,reactionCoordinate,versor,h,currentReactionCoordinate):
@@ -423,12 +428,12 @@ def calcDirectionalGrad2(mol,reactionCoordinate,versor,h,currentReactionCoordina
     return differenceQuotientForDihedralAngle(leftReactionCoordinate,rightReactionCoordinate,h)
     
       
-def calcGrad(mol,reactionCoordinate,h):
+def calcGrad(mol,relevantCoordinates,reactionCoordinate,h):
     numOfAtomsX3 = 3*mol.NumAtoms()
     handleToOpenBabelDoubleArray = openbabel.doubleArray_frompointer(mol.GetCoordinates())
     molCopy = openbabel.OBMol(mol)
     grad = numOfAtomsX3 * [ 0.0 ]
-    for position in RELEVANT_COORDINATES:
+    for position in relevantCoordinates:
         tmp = handleToOpenBabelDoubleArray[position]
         handleToOpenBabelDoubleArray[position] -= h 
         molCopy.SetCoordinates(handleToOpenBabelDoubleArray) # WATCH OUT!
@@ -534,18 +539,18 @@ def calcSecondDerivativeMixedCoordinates(molCopy,nOfAtoms,reactionCoordinate,h,c
         
     return (reactionCoordinateValueRightRight + reactionCoordinateValueLeftLeft - reactionCoordinateValueRightLeft - reactionCoordinateValueLeftRight) / h / h / 4
     
-def calcHessian(mol,reactionCoordinate,h):
+def calcHessian(mol,relevantCoordinates,reactionCoordinate,h):
     nOfAtoms = mol.NumAtoms()
     hessian =  [ [ 0 for i in xrange(3*nOfAtoms)  ] for j in xrange(nOfAtoms*3) ]
     handleToOpenBabelDoubleArray = openbabel.doubleArray_frompointer(mol.GetCoordinates())
     molCopy = openbabel.OBMol(mol)
     
     currentReactionCoordinateValue = reactionCoordinate(mol)
-    for i in xrange(len(RELEVANT_COORDINATES)):
-        coordinateA = RELEVANT_COORDINATES[i]
+    for i in xrange(len(relevantCoordinates)):
+        coordinateA = relevantCoordinates[i]
         hessian[coordinateA][coordinateA] = calcSecondDerivativeInOneCoordinate(molCopy,nOfAtoms,reactionCoordinate,currentReactionCoordinateValue,h,coordinateA,handleToOpenBabelDoubleArray)
-        for j in xrange(i+1,len(RELEVANT_COORDINATES)):
-            coordinateB = RELEVANT_COORDINATES[j]
+        for j in xrange(i+1,len(relevantCoordinates)):
+            coordinateB = relevantCoordinates[j]
             hessian[coordinateA][coordinateB] = calcSecondDerivativeMixedCoordinates(molCopy,nOfAtoms,reactionCoordinate,h,coordinateA,coordinateB,handleToOpenBabelDoubleArray)
             hessian[coordinateB][coordinateA] = hessian[coordinateA][coordinateB]
                     
@@ -625,6 +630,7 @@ def fillOutProductsMatrices(products,productsMatrices):
  
            
 def printOutProductsMatrices(productsMatrices,ticks,step=1,dihedral=0.0,fileName=None,limit=50):
+    import pylab
     pylab.clf()
     fig, axes = plt.subplots(nrows=2, ncols=3)
     
@@ -646,7 +652,7 @@ def printOutProductsMatrices(productsMatrices,ticks,step=1,dihedral=0.0,fileName
 def printOutAngles(angles):
     nOfAngles = len(angles)
     h = 0.001
-    reactionCoordinate = lambda x: calcDih(x,WHICH_ATOMS)
+    reactionCoordinate = lambda x: calcDih(x,whichAtomsForDih)
     ff = openbabel.OBForceField.FindForceField(FF_NAME)
     obConversion = openbabel.OBConversion()
     obConversion.SetInAndOutFormats("mol2", "mol2")
@@ -660,10 +666,10 @@ def printOutAngles(angles):
     
     
     for angle in angles:
-        mol.SetTorsion(WHICH_ATOMS[0],WHICH_ATOMS[1],WHICH_ATOMS[2],WHICH_ATOMS[3],angle*math.pi/180.)
+        mol.SetTorsion(whichAtomsForDih[0],whichAtomsForDih[1],whichAtomsForDih[2],whichAtomsForDih[3],angle*math.pi/180.)
         ff.Setup(mol)
         energy = ff.Energy(True)
-        dihedral = mol.GetTorsion(*WHICH_ATOMS)
+        dihedral = mol.GetTorsion(*whichAtomsForDih)
         print "E(%.2f) = %.2f" % (dihedral,energy)
         obConversion.WriteFile(mol,"nh2-ii_ANGLE_%d.mol2" % int(angle))
         
@@ -685,11 +691,11 @@ def addToAllProductsMatrices(allProductsMatrices_ACCUMULATED,productsMatrices,nO
 def checkHessians(mol,ff,angle,nOfSamples,nOfStepsInBetween,twistPeriod):
     
     assert mol != None and ff != None
-    mol.SetTorsion(WHICH_ATOMS[0],WHICH_ATOMS[1],WHICH_ATOMS[2],WHICH_ATOMS[3], angle*math.pi/180.)
+    mol.SetTorsion(whichAtomsForDih[0],whichAtomsForDih[1],whichAtomsForDih[2],whichAtomsForDih[3], angle*math.pi/180.)
     
     # constants:
     h = 0.0001 # 10^-4 seemed best
-    reactionCoordinate = lambda x: calcDih(x,WHICH_ATOMS)
+    reactionCoordinate = lambda x: calcDih(x,whichAtomsForDih)
     
     vector = [ random.random() for i in xrange(3*mol.NumAtoms()) ]
     print "my estimate: ",calcVectorHessianVectorProduct(mol,reactionCoordinate,h,vector)
@@ -713,29 +719,35 @@ def checkHessians(mol,ff,angle,nOfSamples,nOfStepsInBetween,twistPeriod):
     print "which takes %f sec" % (100*(time.clock()-start))
 
                                                                                         
-def samplingWithConstantReactionCoordinate(mol,ff,angle,nOfSamples,nOfStepsInBetween,twistPeriod):
+def samplingWithConstantReactionCoordinate(mol,whichAtomsForDih,ff,angle,nOfSamples,nOfStepsInBetween,twistPeriod):
     
     assert mol != None and ff != None
         
     random.seed(13) 
+    relevantCoordinates = []
+    for atomNumber in whichAtomsForDih:
+        for i in xrange(3):
+            relevantCoordinates.append(3*(atomNumber-1)+i)
+    # for testing purposes
+    # relevantCoordinates = [i for i in xrange(33)]
     
     # constants:
     h = 0.0001 # 10^-4 seemed best
     def reactionCoordinate(x): 
-        return calcDih(x,WHICH_ATOMS)
+        return calcDih(x,whichAtomsForDih)
 
-    mol.SetTorsion(WHICH_ATOMS[0],WHICH_ATOMS[1],WHICH_ATOMS[2],WHICH_ATOMS[3], angle*math.pi/180.)
+    mol.SetTorsion(whichAtomsForDih[0],whichAtomsForDih[1],whichAtomsForDih[2],whichAtomsForDih[3], angle*math.pi/180.)
     nOfAtoms = mol.NumAtoms()
     tmp = openbabel.doubleArray_frompointer(mol.GetCoordinates())
     coords = 3*nOfAtoms*[0]
     for i in xrange(3*nOfAtoms): coords[i] = tmp[i]     
             
     masses = [ 0 ] * 3*nOfAtoms
-    for i in xrange(nOfAtoms): masses[3*i] = masses[3*i+1] = masses[3*i+2] = 1000 * mol.GetAtom(i+1).GetAtomicMass() # TODO: tak jest w openbabelu
+    for i in xrange(nOfAtoms):
+        masses[3*i] = masses[3*i+1] = masses[3*i+2] = 1000 * mol.GetAtom(i+1).GetAtomicMass()
     
     # data storage and calculation
     dataCalculator = DataAndCalculations(coords,masses)    
-    
     
     # data extracted from the simulation will be storred in the following data structures:
     index = 0
@@ -779,7 +791,7 @@ def samplingWithConstantReactionCoordinate(mol,ff,angle,nOfSamples,nOfStepsInBet
     for iteration in xrange(nOfSamples*nOfStepsInBetween):
         
         if gatherStatisticsFlag==False:
-            dataCalculator.idleKSteps(IDLE_STEPS,mol,ff,reactionCoordinate,h)
+            dataCalculator.idleKSteps(IDLE_STEPS,mol,relevantCoordinates,ff,reactionCoordinate,h)
             gatherStatisticsFlag = True
         else:
             #gradKsi = calcGrad(mol,reactionCoordinate,h)
@@ -787,11 +799,11 @@ def samplingWithConstantReactionCoordinate(mol,ff,angle,nOfSamples,nOfStepsInBet
             #energy = dataCalculator.calculateGradU(ff,mol) this is now in the AndersenIntegrator method
                           
             # ONE STEP OF SIMULATION:
-            energy = dataCalculator.AndersenIntegrator(mol,ff,h,reactionCoordinate)
+            energy = dataCalculator.AndersenIntegrator(mol,relevantCoordinates,ff,h,reactionCoordinate)
             
             if numpy.abs(reactionCoordinate(mol)-angle)>BIN_WIDTH:
                 print "dihedral = ",reactionCoordinate(mol)
-                mol.SetTorsion(WHICH_ATOMS[0],WHICH_ATOMS[1],WHICH_ATOMS[2],WHICH_ATOMS[3],angle*math.pi/180.)
+                mol.SetTorsion(whichAtomsForDih[0],whichAtomsForDih[1],whichAtomsForDih[2],whichAtomsForDih[3],angle*math.pi/180.)
                 tmp = openbabel.doubleArray_frompointer(mol.GetCoordinates())
                 for i in xrange(3*nOfAtoms): coords[i] = tmp[i]     
                 dataCalculator.reset( coords )
@@ -809,19 +821,19 @@ def samplingWithConstantReactionCoordinate(mol,ff,angle,nOfSamples,nOfStepsInBet
             else:
                 shiftTime += 1
             
-            # MEMORIZE LOWEST-ENERGY CONFIGURATION:
+            # remember lowest energy configuration (for visual verification)
             if energy<lowestEnergy:
                 lowestEnergy = energy
                 configurationWithLowestEnergy = openbabel.OBMol(mol)
 
-            # CALCULATE SECOND DERIVATIVES OF KSI:
-            dataCalculator.calculateHessianDiagonal(mol,reactionCoordinate,h)
+            # calculate second derivatives of ksi
+            dataCalculator.calculateHessianDiagonal(mol,relevantCoordinates,reactionCoordinate,h)
             Zksi = dataCalculator.getZksi()
             gradKsi = dataCalculator.getGradKsi()              
                   
             if Zksi==0: print gradKsi
             
-            tmp_mksi_gradU_invMasses_gradKsi = dataCalculator.getMksi_gradU_invMasses_gradKsi() # should be multiplied by Zksi^(-0.5) in this method
+            tmp_mksi_gradU_invMasses_gradKsi = dataCalculator.getMksi_gradU_invMasses_gradKsi() # is multiplied by Zksi^(-0.5) in this method
             tmp_dAdKsi = dataCalculator.getKsiDerivativeOfFreeEnergy() # is multiplied by Zksi^(-0.5) in this method
             if tmp_mksi_gradU_invMasses_gradKsi!=None and tmp_dAdKsi!=None:
                 mksi_gradU_invMasses_gradKsi_ACCUMULATED += tmp_mksi_gradU_invMasses_gradKsi
@@ -834,7 +846,6 @@ def samplingWithConstantReactionCoordinate(mol,ff,angle,nOfSamples,nOfStepsInBet
                 energies[index] = energy  
                 dihedrals[index] = dihedral    
                 Zksis[index] = Zksi 
-                #mksi_gradU_invMasses_gradKsis[index] = tmp_dAdKsi / ZksiToMinusHalf # CO TO BYLO?
                 mksi_gradU_invMasses_gradKsis[index] = tmp_mksi_gradU_invMasses_gradKsi / ZksiToMinusHalf
                 productsMatrices = initProductsMatrices(nOfAtoms)
                 variousForces = ff.GetVariousForces()
@@ -843,8 +854,8 @@ def samplingWithConstantReactionCoordinate(mol,ff,angle,nOfSamples,nOfStepsInBet
                 addToAllProductsMatrices(allProductsMatrices_ACCUMULATED,productsMatrices,nOfAtoms,ZksiToMinusHalf) # it's where productsMatrices are multiplied by ZksiToMinusHalf
                 allProductsMatrices[index] = productsMatrices
                 if numpy.abs(dihedrals[index]-angle)>BIN_WIDTH:
-			print "gathering WRONG stats for dihedral = ",dihedrals[-1]
-			sys.exit(1)
+			        print "gathering WRONG stats for dihedral = ",dihedrals[-1]
+		            os.exit()
                 if energies[-1] != None:
                     if LARGE_OUTPUT:
                         for i in xrange(MEMORY_BUFFER_SIZE):
@@ -962,30 +973,32 @@ def drange(start, stop, step):
      	r += step
               
 if __name__=="__main__":
-    import sys
-    angles = sys.argv[1:]
+    import sys # for reading in command line arguments
+    try:
+        angle = sys.argv[1]
+        whichAtomsForDih = tuple([int(i) for i in sys.argv[2].split(",") ]) # used to define the dihedral angle
+    except IndexError:
+        print "Wrong arguments"
+        print EXAMPLE
+        sys.exit(1)
     
-    # OPENBABEL STUFF:
+    # define Open Babel objects needed to carry out the simulation
     obConversion = openbabel.OBConversion()
     obConversion.SetInAndOutFormats("mol2", "mol2")
     mol = openbabel.OBMol()
     obConversion.ReadFile(mol, MOL2_FILE_NAME)
     ff = openbabel.OBForceField.FindForceField(FF_NAME)    
-    #printOutAngles([-180,-150,-120,-90,-60,-30,0,30,60,90,120,150,180])
 
     
-    # SIMULATION STUFF:    
-    nOfSamples = 10**5
-    twistPeriod = 1000 # TODO: zastanow sie
+    # define simulation parameters  
+    nOfSamples = 10**3
+    twistPeriod = 100 
     nOfStepsInBetween = 1
 
     
     import pickle
-    for angle in angles:
-        angle = int(100*float(angle))/100.
-        print "angle = ",angle
-        #checkHessians(mol,ff,angle,nOfSamples,nOfStepsInBetween,twistPeriod)
-        allProductsMatrices_ACCUMULATED, noShiftTimes, ZksiToMinusHalf_ACCUMULATED = samplingWithConstantReactionCoordinate(mol,ff,angle,nOfSamples,nOfStepsInBetween,twistPeriod)
+    angle = int(100*float(angle))/100.
+    allProductsMatrices_ACCUMULATED, noShiftTimes, ZksiToMinusHalf_ACCUMULATED = samplingWithConstantReactionCoordinate(mol,whichAtomsForDih,ff,angle,nOfSamples,nOfStepsInBetween,twistPeriod)
         
         
     for interaction in allProductsMatrices_ACCUMULATED.keys():

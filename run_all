@@ -1,4 +1,4 @@
-parallel -a abc-file_ii-nh3
-parallel -a abc-file_ii-nh2
-parallel -a abc-file_ii-oh
-parallel -a abc-file_ii-ch3
+parallel -a abc-file_full_ii-nh3
+parallel -a abc-file_full_ii-nh2
+parallel -a abc-file_full_ii-ch3
+parallel -a abc-file_full_ii-ccl
