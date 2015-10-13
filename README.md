@@ -8,4 +8,4 @@ Under construction ...
 
 
 
-Questions? Conntact me: ponadto@gmail.com
+Questions? Contact me: ponadto@gmail.com
