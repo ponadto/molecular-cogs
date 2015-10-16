@@ -1,6 +1,6 @@
 # molecular-cogs
 
-* * * UNDER CONSTRUCTION * * *
+## UNDER CONSTRUCTION 
 
 This source code (*.py and *nb files) is an implementation of a technique of identifying molecular cogs.
 That is, two sepparate parts of a molecule which produce the 
